@@ -37,6 +37,7 @@ app.post("/api/lobby/create", async (req, res) => {
       hostUrl: hostUrl || null,
       placeId: placeId || null, placeName: placeName || null,
       createdAt: now(),
+      lastPing: now(), // <--- ДОБАВЛЕНО
     };
     lobbies.set(lobbyId, lobby);
     const token = jwt.sign({ lobbyId, userId: lobby.hostId, isHost: true }, JWT_SECRET, { expiresIn: "12h" });
@@ -78,6 +79,17 @@ app.get("/api/lobby/list", (req, res) => {
   res.json({ lobbies: list });
 });
 
+// <--- ДОБАВЛЕНО: пульс лобби
+app.post("/api/lobby/heartbeat", (req, res) => {
+  const { lobbyId } = req.body || {};
+  const lobby = lobbies.get(lobbyId);
+  if (lobby) {
+    lobby.lastPing = now();
+    return res.json({ ok: true });
+  }
+  res.status(404).json({ error: "not found" });
+});
+
 app.post("/api/lobby/delete", (req, res) => {
   const { lobbyId, userId } = req.body || {};
   const lobby = lobbies.get(lobbyId);
@@ -87,7 +99,17 @@ app.post("/api/lobby/delete", (req, res) => {
   res.json({ ok: true });
 });
 
-// keep-alive каждые 10 секунд (на случай если Render режет трафик)
+// <--- ДОБАВЛЕНО: удаление зависших лобби (если нет пульса больше 1 минуты)
+setInterval(() => {
+  const t = now();
+  for (const [id, lobby] of lobbies.entries()) {
+    if (t - lobby.lastPing > 60_000) {
+      lobbies.delete(id);
+      console.log("Cleaned up ghost lobby:", id);
+    }
+  }
+}, 15_000);
+
 setInterval(() => {
   const url = CATALOG_PUBLIC_URL ? CATALOG_PUBLIC_URL + "/health" : `http://localhost:${PORT}/health`;
   fetch(url).catch(() => {});

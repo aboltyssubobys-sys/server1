@@ -9,10 +9,7 @@ app.use(express.json({ limit: "2mb" }));
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "change-me";
 const CATALOG_PUBLIC_URL = process.env.CATALOG_PUBLIC_URL || "";
-
 const lobbies = new Map();
-
-function now() { return Date.now(); }
 
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
@@ -22,7 +19,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get("/health", (req, res) => res.json({ ok: true, ts: now(), lobbies: lobbies.size }));
+app.get("/health", (req, res) => res.json({ ok: true, ts: Date.now(), lobbies: lobbies.size }));
 
 app.post("/api/lobby/create", async (req, res) => {
   try {
@@ -31,20 +28,14 @@ app.post("/api/lobby/create", async (req, res) => {
     const lobbyId = crypto.randomUUID();
     const passwordHash = password ? await bcrypt.hash(password, 10) : null;
     const lobby = {
-      id: lobbyId, name,
-      hostId: Number(hostId), hostName: hostName || String(hostId),
-      passwordHash, isPrivate: !!isPrivate,
-      hostUrl: hostUrl || null,
-      placeId: placeId || null, placeName: placeName || null,
-      createdAt: now(),
-      lastPing: now(), // <--- ДОБАВЛЕНО
+      id: lobbyId, name, hostId: Number(hostId), hostName: hostName || String(hostId),
+      passwordHash, isPrivate: !!isPrivate, hostUrl: hostUrl || null,
+      placeId: placeId || null, placeName: placeName || null, createdAt: Date.now(), lastPing: Date.now(),
     };
     lobbies.set(lobbyId, lobby);
     const token = jwt.sign({ lobbyId, userId: lobby.hostId, isHost: true }, JWT_SECRET, { expiresIn: "12h" });
     res.json({ lobbyId, token, hostUrl: lobby.hostUrl });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
+  } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
 app.post("/api/lobby/join", async (req, res) => {
@@ -57,10 +48,7 @@ app.post("/api/lobby/join", async (req, res) => {
     if (!ok) return res.status(403).json({ error: "invalid password" });
   }
   const uid = Number(userId);
-  const token = jwt.sign(
-    { lobbyId, userId: uid, userName, isHost: lobby.hostId === uid },
-    JWT_SECRET, { expiresIn: "12h" }
-  );
+  const token = jwt.sign({ lobbyId, userId: uid, userName, isHost: lobby.hostId === uid }, JWT_SECRET, { expiresIn: "12h" });
   res.json({ token, hostUrl: lobby.hostUrl, lobbyId });
 });
 
@@ -68,25 +56,16 @@ app.get("/api/lobby/list", (req, res) => {
   const list = [];
   for (const l of lobbies.values()) {
     if (l.isPrivate) continue;
-    list.push({
-      id: l.id, name: l.name, hostName: l.hostName, hostId: l.hostId,
-      hasPassword: !!l.passwordHash,
-      placeName: l.placeName, placeId: l.placeId,
-      hostUrl: l.hostUrl, createdAt: l.createdAt,
-    });
+    list.push({ id: l.id, name: l.name, hostName: l.hostName, hostId: l.hostId, hasPassword: !!l.passwordHash, placeName: l.placeName, placeId: l.placeId, hostUrl: l.hostUrl, createdAt: l.createdAt });
   }
   list.sort((a, b) => b.createdAt - a.createdAt);
   res.json({ lobbies: list });
 });
 
-// <--- ДОБАВЛЕНО: пульс лобби
 app.post("/api/lobby/heartbeat", (req, res) => {
   const { lobbyId } = req.body || {};
   const lobby = lobbies.get(lobbyId);
-  if (lobby) {
-    lobby.lastPing = now();
-    return res.json({ ok: true });
-  }
+  if (lobby) { lobby.lastPing = Date.now(); return res.json({ ok: true }); }
   res.status(404).json({ error: "not found" });
 });
 
@@ -99,20 +78,12 @@ app.post("/api/lobby/delete", (req, res) => {
   res.json({ ok: true });
 });
 
-// <--- ДОБАВЛЕНО: удаление зависших лобби (если нет пульса больше 1 минуты)
+// 🟢 Cleanup ghost lobbies
 setInterval(() => {
-  const t = now();
-  for (const [id, lobby] of lobbies.entries()) {
-    if (t - lobby.lastPing > 60_000) {
-      lobbies.delete(id);
-      console.log("Cleaned up ghost lobby:", id);
-    }
-  }
-}, 15_000);
-
-setInterval(() => {
+  const now = Date.now();
+  for (const [id, l] of lobbies) if (now - l.lastPing > 60_000) lobbies.delete(id);
   const url = CATALOG_PUBLIC_URL ? CATALOG_PUBLIC_URL + "/health" : `http://localhost:${PORT}/health`;
   fetch(url).catch(() => {});
-}, 10_000);
+}, 15_000);
 
 app.listen(PORT, () => console.log("Catalog listening on", PORT));
